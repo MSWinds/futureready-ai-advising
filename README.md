@@ -12,9 +12,3 @@
 - **Backend**: Python with FastAPI
 - **Database**: Vector databases (PostgreSQL with vector extensions or Pinecone)
 - **AI Framework**: Multi-agent Retrieval-Augmented Generation (RAG) architecture
-
-## Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-username/futureready-ai-advising.git
-
