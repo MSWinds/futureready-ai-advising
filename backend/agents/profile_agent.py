@@ -1,8 +1,6 @@
-from typing import List, Dict
-from prompts.prompt_template import student_info_summary_template
 from typing import Dict
 from pydantic import BaseModel, Field
-from llama_index.llms.openai import OpenAI
+from prompts.prompt_template import student_info_summary_template
 
 class StudentInfo(BaseModel):
     """Pydantic model for student information"""
