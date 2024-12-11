@@ -183,10 +183,10 @@ export default function RecommendationPage() {
             Your Personalized Career Recommendations
           </h1>
           <p className="text-center text-xl text-gray-600 mb-2">
-            AI-Enhanced Career Guidance Based on Your Profile
+            AI-Enhanced Career Guidance Based on StudentProfile
           </p>
           <p className="text-center text-gray-500 italic">
-            Discover pathways aligned with your interests and strengths
+            Discover pathways aligned with student interests and strengths
           </p>
         </div>
 
