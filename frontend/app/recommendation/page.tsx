@@ -1,4 +1,3 @@
-// app/recommendation/page.tsx
 'use client';
 
 import { useSearchParams } from 'next/navigation';
@@ -8,7 +7,7 @@ import RecommendationCard from '../components/RecommendationCard';
 import { AlertCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '../components/alert';
 
-// Recommendation Types
+// Recommendation Types remain the same
 interface QuickView {
   title: string;
   summary: string;
@@ -42,7 +41,6 @@ type WebSocketMessage =
   | { type: 'recommendations'; payload: RecommendationsResponse }
   | { type: 'error'; payload: string };
 
-// Helper Functions
 const normalizeRecommendationType = (type: string): 'Alumni' | 'Trend' | 'Inspiration' => {
   switch (type.toLowerCase()) {
     case 'alumni':
@@ -67,69 +65,119 @@ export default function RecommendationPage() {
   const [currentStatus, setCurrentStatus] = useState<string>('Retrieving recommendations...');
 
   useEffect(() => {
-    if (!sessionId) {
-      setError('Session ID is missing. Please try again.');
-      setIsLoading(false);
-      return;
-    }
+    let ws: WebSocket;
 
-    const ws = new WebSocket('ws://localhost:8000/ws/verify_session');
+    const setupWebSocket = () => {
+      if (!sessionId) {
+        setError('Session ID is missing. Please try again.');
+        setIsLoading(false);
+        return;
+      }
 
-    ws.onopen = () => {
-      console.log('WebSocket connected');
-      setCurrentStatus('Connecting to server...');
-      ws.send(JSON.stringify({ session_id: sessionId }));
+      // First check localStorage for existing recommendations
+      const cachedRecommendations = localStorage.getItem(`recommendations_${sessionId}`);
+      if (cachedRecommendations) {
+        try {
+          const data = JSON.parse(cachedRecommendations);
+          setRecommendations(
+            data.recommendations.map((rec: any) => ({
+              ...rec,
+              type: normalizeRecommendationType(rec.type),
+            }))
+          );
+          setIsLoading(false);
+          // Clear the cache after successful retrieval
+          localStorage.removeItem(`recommendations_${sessionId}`);
+          return;
+        } catch (err) {
+          console.error('Failed to parse cached recommendations:', err);
+        }
+      }
+
+      // If no cached data or cache parsing failed, establish WebSocket connection
+      ws = new WebSocket('ws://localhost:8000/ws/verify_session');
+
+      ws.onopen = () => {
+        console.log('WebSocket connected');
+        setCurrentStatus('Connecting to server...');
+        ws.send(JSON.stringify({ 
+          session_id: sessionId,
+          summary: 'fetch_from_db'
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const response = JSON.parse(event.data) as WebSocketMessage;
+
+          switch (response.type) {
+            case 'status':
+              setCurrentStatus(response.payload.message);
+              break;
+
+            case 'recommendations':
+              setRecommendations(
+                response.payload.recommendations.map((rec) => ({
+                  ...rec,
+                  type: normalizeRecommendationType(rec.type),
+                }))
+              );
+              setIsLoading(false);
+              // Close WebSocket after receiving recommendations
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+              }
+              break;
+
+            case 'error':
+              setError(response.payload);
+              setIsLoading(false);
+              // Close WebSocket on error
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+              }
+              break;
+
+            default:
+              console.warn('Unexpected message type:', response);
+          }
+        } catch (err) {
+          console.error('Failed to process message:', err);
+          setError('An error occurred while processing recommendations.');
+          setIsLoading(false);
+          // Close WebSocket on error
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+          }
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setError('WebSocket connection error. Please try again.');
+        setIsLoading(false);
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket connection closed');
+      };
     };
 
-    ws.onmessage = (event) => {
-      try {
-        const response = JSON.parse(event.data) as WebSocketMessage;
+    setupWebSocket();
 
-        switch (response.type) {
-          case 'status':
-            setCurrentStatus(response.payload.message);
-            break;
-
-          case 'recommendations':
-            setRecommendations(
-              response.payload.recommendations.map((rec) => ({
-                ...rec,
-                type: normalizeRecommendationType(rec.type),
-              }))
-            );
-            setIsLoading(false);
-            break;
-
-          case 'error':
-            setError(response.payload);
-            setIsLoading(false);
-            break;
-
-          default:
-            console.warn('Unexpected message type:', response);
-        }
-      } catch (err) {
-        console.error('Failed to process message:', err);
-        setError('An error occurred while processing recommendations.');
-        setIsLoading(false);
+    // Cleanup function
+    return () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        console.log('Cleaning up WebSocket connection');
+        ws.close();
       }
     };
-
-    ws.onerror = () => {
-      setError('WebSocket connection error. Please try again.');
-      setIsLoading(false);
-    };
-
-    ws.onclose = () => {
-      console.log('WebSocket connection closed');
-    };
-
-    return () => ws.close();
   }, [sessionId]);
+
 
   return (
     <main className="min-h-screen bg-gradient-to-r from-[#0f172a] to-[#334155] py-12 px-4">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-5xl mx-auto space-y-6">
         <div className="bg-gray-50/95 backdrop-blur-md rounded-2xl shadow-xl p-8 mb-8">
           <h1 className="text-4xl font-extrabold text-center mb-4 bg-clip-text text-transparent bg-gradient-to-r from-[#0f172a] to-[#334155]">
             Your Personalized Career Recommendations
@@ -164,7 +212,20 @@ export default function RecommendationPage() {
             </AlertDescription>
           </Alert>
         )}
-        </div>
-      </main>
-    );
-  }
+
+        {!isLoading && (
+          <div className="bg-gray-50/95 backdrop-blur-md rounded-2xl shadow-xl p-8">
+            <div className="flex gap-4">
+              <button
+                onClick={() => window.history.back()}
+                className="flex-1 py-3 bg-gradient-to-r from-[#0f172a] to-[#334155] text-white font-bold rounded-lg hover:from-[#1e293b] hover:to-[#475569] shadow-lg transform hover:scale-105 transition-all"
+              >
+                Back to Student Profile
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}

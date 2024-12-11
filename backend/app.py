@@ -137,10 +137,9 @@ async def verify_session(websocket: WebSocket):
     await websocket.accept()
     
     try:
-        # Get session data from frontend
         data = await websocket.receive_json()
         session_id = data.get('session_id')
-        student_summary = data.get('summary')  # Frontend needs to send this too
+        student_summary = data.get('summary')
 
         if not session_id:
             await websocket.send_json({
@@ -150,8 +149,8 @@ async def verify_session(websocket: WebSocket):
             return
 
         try:
-            # Just verify UUID format
-            uuid.UUID(session_id)
+            # Verify UUID format
+            session_uuid = uuid.UUID(session_id)
         except ValueError:
             await websocket.send_json({
                 "type": "error",
@@ -159,8 +158,24 @@ async def verify_session(websocket: WebSocket):
             })
             return
 
+        # If summary is 'fetch_from_db' or not provided, get it from the database
+        if not student_summary or student_summary == 'fetch_from_db':
+            async with AsyncSessionLocal() as db:
+                stmt = select(StudentSession).where(StudentSession.session_id == session_uuid)
+                result = await db.execute(stmt)
+                session = result.scalar_one_or_none()
+                
+                if session:
+                    student_summary = session.profile_summary
+                else:
+                    await websocket.send_json({
+                        "type": "error",
+                        "payload": "Session not found in database"
+                    })
+                    return
+
         try:
-            # Generate recommendations directly
+            # Start search process
             await websocket.send_json({
                 "type": "status",
                 "payload": {
@@ -170,7 +185,7 @@ async def verify_session(websocket: WebSocket):
                 }
             })
 
-            # Execute search
+            # Execute search with timeout
             search_results = await asyncio.wait_for(
                 search_agent.execute_combined_search(student_summary),
                 timeout=60
@@ -185,7 +200,7 @@ async def verify_session(websocket: WebSocket):
                 }
             })
 
-            # Generate recommendations
+            # Generate recommendations with timeout
             recommendations = await asyncio.wait_for(
                 recommendation_agent.generate_recommendations(
                     search_results,
@@ -203,6 +218,16 @@ async def verify_session(websocket: WebSocket):
                 "timestamp": datetime.utcnow().isoformat()
             }
 
+            # Save recommendations to database in background
+            background_tasks = BackgroundTasks()
+            background_tasks.add_task(
+                save_recommendations_background,
+                session_id=str(session_uuid),
+                search_queries=search_results["queries"],
+                search_results=search_results["results"],
+                recommendations=recommendation_data
+            )
+
             # Send final recommendations
             await websocket.send_json({
                 "type": "recommendations",
@@ -210,25 +235,32 @@ async def verify_session(websocket: WebSocket):
             })
 
         except asyncio.TimeoutError:
+            error_msg = "Operation timed out. Please try again."
+            print(f"Timeout error: {error_msg}")
             await websocket.send_json({
                 "type": "error",
-                "payload": "Operation timed out. Please try again."
+                "payload": error_msg
             })
         except Exception as e:
-            print(f"Error in recommendation generation: {e}")
+            error_msg = f"Error in recommendation generation: {str(e)}"
+            print(error_msg)
             await websocket.send_json({
                 "type": "error",
-                "payload": str(e)
+                "payload": error_msg
             })
 
     except Exception as e:
-        print(f"Session verification error: {e}")
+        error_msg = f"Session verification error: {str(e)}"
+        print(error_msg)
         await websocket.send_json({
             "type": "error",
-            "payload": str(e)
+            "payload": error_msg
         })
     finally:
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception as e:
+            print(f"Error closing websocket: {e}")
 
 @app.get("/health")
 async def health_check():

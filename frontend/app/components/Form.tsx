@@ -112,6 +112,8 @@ export default function StudentForm() {
             if (response.type === 'status') {
                 setCurrentStatus(response.payload.message)
             } else if (response.type === 'recommendations') {
+                // Store recommendations in localStorage before navigation
+                localStorage.setItem(`recommendations_${sessionId}`, JSON.stringify(response.payload))
                 router.push(`/recommendation?id=${sessionId}`)
             } else if (response.type === 'error') {
                 setShowLoadingOverlay(false)
