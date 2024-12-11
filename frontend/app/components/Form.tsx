@@ -1,5 +1,4 @@
 // app/components/Form.tsx
-// app/components/Form.tsx
 'use client'
 
 import { useState } from 'react'
@@ -26,6 +25,7 @@ export default function StudentForm() {
     const router = useRouter()
     const [isLoading, setIsLoading] = useState(false)
     const [showLoadingOverlay, setShowLoadingOverlay] = useState(false)
+    const [currentStatus, setCurrentStatus] = useState<string>('')
     const [summary, setSummary] = useState<string | null>(null)
     const [sessionId, setSessionId] = useState<string | null>(null)
     const [formData, setFormData] = useState<FormFields>({
@@ -94,6 +94,7 @@ export default function StudentForm() {
             return
         }
         setShowLoadingOverlay(true)
+        setCurrentStatus('Verifying session and preparing recommendations...')
         
         const ws = new WebSocket('ws://localhost:8000/ws/verify_session')
         
@@ -103,23 +104,36 @@ export default function StudentForm() {
         
         ws.onmessage = (event) => {
             const response = JSON.parse(event.data)
-            if (response.type === 'valid') {
-                router.push(`/recommendation?id=${sessionId}`)
-            } else {
-                alert('Session expired. Please regenerate the profile.')
+            console.log('Received verify response:', response)
+
+            if (response.type === 'status') {
+                // Update loading message based on backend status
+                setCurrentStatus(response.payload.message)
+            } else if (response.type === 'valid') {
+                // Navigate to recommendation page, passing loading state
+                router.push(`/recommendation?id=${sessionId}&phase=recommendation`)
+            } else if (response.type === 'error') {
+                setShowLoadingOverlay(false)
+                alert('Error: ' + response.payload)
+            } else if (response.type === 'invalid') {
+                setShowLoadingOverlay(false)
+                alert(response.payload || 'Session expired. Please regenerate the profile.')
                 setSummary(null)
                 setSessionId(null)
             }
-            ws.close()
         }
         
-        ws.onerror = () => {
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error)
             alert('Connection error. Please try again.')
             setShowLoadingOverlay(false)
         }
         
         ws.onclose = () => {
-            setShowLoadingOverlay(false)
+            // Only hide loading if we're not transitioning to recommendations
+            if (!document.hidden) {
+                setShowLoadingOverlay(false)
+            }
         }
     }
 
@@ -142,6 +156,7 @@ export default function StudentForm() {
                         Enter student information to generate AI-enhanced recommendations
                     </p>
                 </div>
+
                 {/* Form Fields */}
                 {[
                     { 
@@ -274,6 +289,7 @@ export default function StudentForm() {
             <LoadingOverlay 
                 isVisible={showLoadingOverlay} 
                 showProgressMessages={true}
+                currentMessage={currentStatus}
             />
         </div>
     )
