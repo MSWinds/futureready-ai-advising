@@ -89,37 +89,33 @@ export default function StudentForm() {
     }
     
     const proceedToNext = () => {
-        if (!sessionId) {
+        if (!sessionId || !summary) {
             alert('Please generate a profile first.')
             return
         }
         setShowLoadingOverlay(true)
-        setCurrentStatus('Verifying session and preparing recommendations...')
+        setCurrentStatus('Generating recommendations...')
         
         const ws = new WebSocket('ws://localhost:8000/ws/verify_session')
         
         ws.onopen = () => {
-            ws.send(JSON.stringify({ session_id: sessionId }))
+            ws.send(JSON.stringify({ 
+                session_id: sessionId,
+                summary: summary
+            }))
         }
         
         ws.onmessage = (event) => {
             const response = JSON.parse(event.data)
-            console.log('Received verify response:', response)
-
+            console.log('Received response:', response)
+    
             if (response.type === 'status') {
-                // Update loading message based on backend status
                 setCurrentStatus(response.payload.message)
-            } else if (response.type === 'valid') {
-                // Navigate to recommendation page, passing loading state
-                router.push(`/recommendation?id=${sessionId}&phase=recommendation`)
+            } else if (response.type === 'recommendations') {
+                router.push(`/recommendation?id=${sessionId}`)
             } else if (response.type === 'error') {
                 setShowLoadingOverlay(false)
                 alert('Error: ' + response.payload)
-            } else if (response.type === 'invalid') {
-                setShowLoadingOverlay(false)
-                alert(response.payload || 'Session expired. Please regenerate the profile.')
-                setSummary(null)
-                setSessionId(null)
             }
         }
         
@@ -130,10 +126,7 @@ export default function StudentForm() {
         }
         
         ws.onclose = () => {
-            // Only hide loading if we're not transitioning to recommendations
-            if (!document.hidden) {
-                setShowLoadingOverlay(false)
-            }
+            setShowLoadingOverlay(false)
         }
     }
 

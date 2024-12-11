@@ -133,285 +133,102 @@ async def profile_websocket(websocket: WebSocket):
             await websocket.close()
 
 @app.websocket("/ws/verify_session")
-async def verify_session(websocket: WebSocket, background_tasks: BackgroundTasks):
+async def verify_session(websocket: WebSocket):
     await websocket.accept()
     
-    async with AsyncSessionLocal() as db:
+    try:
+        # Get session data from frontend
+        data = await websocket.receive_json()
+        session_id = data.get('session_id')
+        student_summary = data.get('summary')  # Frontend needs to send this too
+
+        if not session_id:
+            await websocket.send_json({
+                "type": "error",
+                "payload": "No session ID provided"
+            })
+            return
+
         try:
-            data = await websocket.receive_json()
-            session_id = data.get('session_id')
-            print(f"Received session_id: {session_id}")
+            # Just verify UUID format
+            uuid.UUID(session_id)
+        except ValueError:
+            await websocket.send_json({
+                "type": "error",
+                "payload": "Invalid session ID format"
+            })
+            return
 
-            if not session_id:
-                await websocket.send_json({
-                    "type": "invalid",
-                    "payload": "No session ID provided"
-                })
-                return
+        try:
+            # Generate recommendations directly
+            await websocket.send_json({
+                "type": "status",
+                "payload": {
+                    "phase": "init",
+                    "message": "Starting search process...",
+                    "progress": 0.1
+                }
+            })
 
-            try:
-                session_uuid = uuid.UUID(session_id)
-            except ValueError:
-                await websocket.send_json({
-                    "type": "invalid",
-                    "payload": "Invalid session ID format"
-                })
-                return
-
-            query = (
-                select(StudentSession)
-                .options(selectinload(StudentSession.recommendations))
-                .where(StudentSession.session_id == session_uuid)
+            # Execute search
+            search_results = await asyncio.wait_for(
+                search_agent.execute_combined_search(student_summary),
+                timeout=60
             )
-            
-            result = await db.execute(query)
-            session = result.scalar_one_or_none()
-            
-            if not session:
-                await websocket.send_json({
-                    "type": "invalid",
-                    "payload": "Session not found"
-                })
-                return
 
-            if (datetime.utcnow() - session.timestamp).total_seconds() >= 3600:
-                await websocket.send_json({
-                    "type": "invalid",
-                    "payload": "Session expired"
-                })
-                return
+            await websocket.send_json({
+                "type": "status",
+                "payload": {
+                    "phase": "recommendation",
+                    "message": "Generating recommendations...",
+                    "progress": 0.6
+                }
+            })
 
-            try:
-                # Generate new recommendations if they don't exist
-                if not session.recommendations:
-                    await websocket.send_json({
-                        "type": "status",
-                        "payload": {
-                            "phase": "init",
-                            "message": "Starting search process...",
-                            "progress": 0.1
-                        }
-                    })
+            # Generate recommendations
+            recommendations = await asyncio.wait_for(
+                recommendation_agent.generate_recommendations(
+                    search_results,
+                    student_summary
+                ),
+                timeout=90
+            )
 
-                    search_results = await asyncio.wait_for(
-                        search_agent.execute_combined_search(session.profile_summary),
-                        timeout=60
-                    )
+            if recommendations.get("status") == "error":
+                raise ValueError(recommendations.get("error"))
 
-                    await websocket.send_json({
-                        "type": "status",
-                        "payload": {
-                            "phase": "recommendation",
-                            "message": "Generating recommendations...",
-                            "progress": 0.6
-                        }
-                    })
-                    # In verify_session websocket handler
-                    print("-Search Results Structure-:", json.dumps(search_results, indent=2))
-                    recommendations = await asyncio.wait_for(
-                        recommendation_agent.generate_recommendations(
-                            search_results,
-                            session.profile_summary
-                        ),
-                        timeout=90
-                    )
+            # Prepare response data
+            recommendation_data = {
+                "recommendations": [rec.dict() for rec in recommendations["recommendations"]],
+                "timestamp": datetime.utcnow().isoformat()
+            }
 
-                    if recommendations.get("status") == "error":
-                        raise ValueError(recommendations.get("error"))
+            # Send final recommendations
+            await websocket.send_json({
+                "type": "recommendations",
+                "payload": recommendation_data
+            })
 
-                    # Convert Pydantic models to dict for JSON serialization
-                    recommendation_data = {
-                        "recommendations": [rec.dict() for rec in recommendations["recommendations"]],
-                        "timestamp": recommendations["timestamp"]
-                    }
-
-                    # Send recommendations immediately to UI
-                    await websocket.send_json({
-                        "type": "recommendations",
-                        "payload": recommendation_data
-                    })
-
-                    # Save to database in background
-                    background_tasks.add_task(
-                        save_recommendations_background,
-                        session_id=str(session_uuid),
-                        search_queries=search_results["queries"],
-                        search_results=search_results["results"],
-                        recommendations=recommendation_data["recommendations"]
-                    )
-
-                    await websocket.send_json({
-                        "type": "status",
-                        "payload": {
-                            "phase": "complete",
-                            "message": "Recommendations ready",
-                            "progress": 1.0
-                        }
-                    })
-
-                # Send success response
-                await websocket.send_json({
-                    "type": "valid",
-                    "payload": {
-                        "session_id": str(session.session_id),
-                        "has_recommendations": True
-                    }
-                })
-
-            except asyncio.TimeoutError:
-                await websocket.send_json({
-                    "type": "error",
-                    "payload": "Operation timed out. Please try again."
-                })
-                return
-            except Exception as e:
-                print(f"Error in recommendation generation: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "payload": str(e)
-                })
-
+        except asyncio.TimeoutError:
+            await websocket.send_json({
+                "type": "error",
+                "payload": "Operation timed out. Please try again."
+            })
         except Exception as e:
-            print(f"Session verification error: {e}")
+            print(f"Error in recommendation generation: {e}")
             await websocket.send_json({
                 "type": "error",
                 "payload": str(e)
             })
-        finally:
-            await websocket.close()
 
-@app.websocket("/ws/recommendations/{session_id}")
-async def recommendation_websocket(websocket: WebSocket, session_id: str, background_tasks: BackgroundTasks):
-    await websocket.accept()
-    
-    async with AsyncSessionLocal() as db:
-        try:
-            # First verify the session
-            try:
-                session_uuid = uuid.UUID(session_id)
-            except ValueError:
-                await websocket.send_json({
-                    "type": "error",
-                    "payload": "Invalid session ID format"
-                })
-                return
-
-            # Check if we have existing recommendations
-            stmt = select(RecommendationSession).where(
-                RecommendationSession.session_id == session_uuid
-            )
-            result = await db.execute(stmt)
-            rec_session = result.scalar_one_or_none()
-
-            if rec_session and rec_session.recommendations:
-                # If we have cached recommendations, send them immediately
-                await websocket.send_json({
-                    "type": "recommendations",
-                    "payload": {
-                        "recommendations": rec_session.recommendations,
-                        "timestamp": rec_session.timestamp.isoformat()
-                    }
-                })
-            else:
-                # We need to fetch the student session first
-                stmt = select(StudentSession).where(
-                    StudentSession.session_id == session_uuid
-                )
-                result = await db.execute(stmt)
-                student_session = result.scalar_one_or_none()
-
-                if not student_session:
-                    await websocket.send_json({
-                        "type": "error",
-                        "payload": "Session not found"
-                    })
-                    return
-
-                if (datetime.utcnow() - student_session.timestamp).total_seconds() >= 3600:
-                    await websocket.send_json({
-                        "type": "error",
-                        "payload": "Session expired"
-                    })
-                    return
-
-                # Generate new recommendations
-                try:
-                    await websocket.send_json({
-                        "type": "status",
-                        "payload": {
-                            "phase": "init",
-                            "message": "Starting search process...",
-                            "progress": 0.1
-                        }
-                    })
-
-                    # Execute search
-                    search_results = await asyncio.wait_for(
-                        search_agent.execute_combined_search(student_session.profile_summary),
-                        timeout=60
-                    )
-
-                    await websocket.send_json({
-                        "type": "status",
-                        "payload": {
-                            "phase": "recommendation",
-                            "message": "Generating recommendations...",
-                            "progress": 0.6
-                        }
-                    })
-
-                    # Generate recommendations
-                    recommendations = await asyncio.wait_for(
-                        recommendation_agent.generate_recommendations(
-                            search_results,
-                            student_session.profile_summary
-                        ),
-                        timeout=90
-                    )
-
-                    if recommendations.get("status") == "error":
-                        raise ValueError(recommendations.get("error"))
-
-                    # Convert Pydantic models to dict for JSON serialization
-                    recommendation_data = {
-                        "recommendations": [rec.dict() for rec in recommendations["recommendations"]],
-                        "timestamp": recommendations["timestamp"]
-                    }
-
-                    # Save recommendations in background
-                    background_tasks.add_task(
-                        save_recommendations_background,
-                        session_id=str(session_uuid),
-                        search_queries=search_results["queries"],
-                        search_results=search_results["results"],
-                        recommendations=recommendation_data
-                    )
-
-                    # Send final recommendations
-                    await websocket.send_json({
-                        "type": "recommendations",
-                        "payload": recommendation_data
-                    })
-
-                except asyncio.TimeoutError:
-                    await websocket.send_json({
-                        "type": "error",
-                        "payload": "Operation timed out. Please try again."
-                    })
-                except Exception as e:
-                    await websocket.send_json({
-                        "type": "error",
-                        "payload": str(e)
-                    })
-
-        except Exception as e:
-            print(f"Recommendation error: {str(e)}")
-            await websocket.send_json({
-                "type": "error",
-                "payload": str(e)
-            })
-        finally:
-            await websocket.close()
+    except Exception as e:
+        print(f"Session verification error: {e}")
+        await websocket.send_json({
+            "type": "error",
+            "payload": str(e)
+        })
+    finally:
+        await websocket.close()
 
 @app.get("/health")
 async def health_check():
