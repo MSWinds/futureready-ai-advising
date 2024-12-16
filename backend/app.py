@@ -14,7 +14,14 @@ from llama_index.core import VectorStoreIndex
 from agents.profile_agent import ProfileAgent, StudentInfo
 from agents.search_agent import SearchAgent
 from agents.recommendation_agent import RecommendationAgent
-from database.db import AsyncSessionLocal, init_db, save_session, save_recommendation_session
+from database.db import (
+    AsyncSessionLocal, 
+    init_db, 
+    save_session, 
+    save_recommendation_session, 
+    get_verified_recommendation_session,
+    verify_session
+)
 from database.models import StudentSession, RecommendationSession
 from contextlib import asynccontextmanager
 import uuid
@@ -133,7 +140,7 @@ async def profile_websocket(websocket: WebSocket):
             await websocket.close()
 
 @app.websocket("/ws/verify_session")
-async def verify_session(websocket: WebSocket):
+async def verify_session_websocket(websocket: WebSocket):
     await websocket.accept()
     
     try:
@@ -148,31 +155,34 @@ async def verify_session(websocket: WebSocket):
             })
             return
 
-        try:
-            # Verify UUID format
-            session_uuid = uuid.UUID(session_id)
-        except ValueError:
-            await websocket.send_json({
-                "type": "error",
-                "payload": "Invalid session ID format"
-            })
-            return
-
-        # If summary is 'fetch_from_db' or not provided, get it from the database
-        if not student_summary or student_summary == 'fetch_from_db':
-            async with AsyncSessionLocal() as db:
-                stmt = select(StudentSession).where(StudentSession.session_id == session_uuid)
-                result = await db.execute(stmt)
-                session = result.scalar_one_or_none()
-                
-                if session:
-                    student_summary = session.profile_summary
-                else:
+        # First check for existing recommendations
+        async with AsyncSessionLocal() as db:
+            existing_rec, error_message = await get_verified_recommendation_session(session_id, db)
+            if error_message:
+                if "No recommendations found" not in error_message:
                     await websocket.send_json({
                         "type": "error",
-                        "payload": "Session not found in database"
+                        "payload": error_message
                     })
                     return
+            elif existing_rec and existing_rec.get('recommendations'):
+                await websocket.send_json({
+                    "type": "recommendations",
+                    "payload": existing_rec
+                })
+                return
+
+            # If no existing recommendations, verify session and get summary if needed
+            is_valid, error_message, session = await verify_session(session_id, db)
+            if not is_valid:
+                await websocket.send_json({
+                    "type": "error",
+                    "payload": error_message
+                })
+                return
+
+            if not student_summary or student_summary == 'fetch_from_db':
+                student_summary = session.profile_summary
 
         try:
             # Start search process
@@ -222,7 +232,7 @@ async def verify_session(websocket: WebSocket):
             background_tasks = BackgroundTasks()
             background_tasks.add_task(
                 save_recommendations_background,
-                session_id=str(session_uuid),
+                session_id=session_id,
                 search_queries=search_results["queries"],
                 search_results=search_results["results"],
                 recommendations=recommendation_data

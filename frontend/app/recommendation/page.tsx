@@ -1,3 +1,4 @@
+// app/recommendation/page.tsx
 'use client';
 
 import { useSearchParams } from 'next/navigation';
@@ -7,7 +8,6 @@ import RecommendationCard from '../components/RecommendationCard';
 import { AlertCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '../components/alert';
 
-// Recommendation Types remain the same
 interface QuickView {
   title: string;
   summary: string;
@@ -63,9 +63,10 @@ export default function RecommendationPage() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [currentStatus, setCurrentStatus] = useState<string>('Retrieving recommendations...');
+  const [hasSetRecommendations, setHasSetRecommendations] = useState(false);
 
   useEffect(() => {
-    let ws: WebSocket;
+    let ws: WebSocket | null = null;
 
     const setupWebSocket = () => {
       if (!sessionId) {
@@ -74,9 +75,9 @@ export default function RecommendationPage() {
         return;
       }
 
-      // First check localStorage for existing recommendations
+      // Check localStorage first
       const cachedRecommendations = localStorage.getItem(`recommendations_${sessionId}`);
-      if (cachedRecommendations) {
+      if (cachedRecommendations && !hasSetRecommendations) {
         try {
           const data = JSON.parse(cachedRecommendations);
           setRecommendations(
@@ -86,94 +87,110 @@ export default function RecommendationPage() {
             }))
           );
           setIsLoading(false);
-          // Clear the cache after successful retrieval
+          setHasSetRecommendations(true);
           localStorage.removeItem(`recommendations_${sessionId}`);
-          return;
+          return; // Don't establish WebSocket if we have cache
         } catch (err) {
           console.error('Failed to parse cached recommendations:', err);
         }
       }
 
-      // If no cached data or cache parsing failed, establish WebSocket connection
-      ws = new WebSocket('ws://localhost:8000/ws/verify_session');
-
-      ws.onopen = () => {
-        console.log('WebSocket connected');
-        setCurrentStatus('Connecting to server...');
-        ws.send(JSON.stringify({ 
-          session_id: sessionId,
-          summary: 'fetch_from_db'
-        }));
-      };
-
-      ws.onmessage = (event) => {
+      // Only establish WebSocket if we haven't set recommendations yet
+      if (!hasSetRecommendations) {
         try {
-          const response = JSON.parse(event.data) as WebSocketMessage;
+          ws = new WebSocket('ws://localhost:8000/ws/verify_session');
 
-          switch (response.type) {
-            case 'status':
-              setCurrentStatus(response.payload.message);
-              break;
+          ws.onopen = () => {
+            console.log('WebSocket connected');
+            setCurrentStatus('Connecting to server...');
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ 
+                session_id: sessionId,
+                summary: 'fetch_from_db'
+              }));
+            }
+          };
 
-            case 'recommendations':
-              setRecommendations(
-                response.payload.recommendations.map((rec) => ({
-                  ...rec,
-                  type: normalizeRecommendationType(rec.type),
-                }))
-              );
+          ws.onmessage = (event) => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+              return;
+            }
+
+            try {
+              const response = JSON.parse(event.data) as WebSocketMessage;
+
+              switch (response.type) {
+                case 'status':
+                  setCurrentStatus(response.payload.message);
+                  break;
+
+                case 'recommendations':
+                  if (!hasSetRecommendations) {
+                    setRecommendations(
+                      response.payload.recommendations.map((rec) => ({
+                        ...rec,
+                        type: normalizeRecommendationType(rec.type),
+                      }))
+                    );
+                    setHasSetRecommendations(true);
+                    setIsLoading(false);
+                  }
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.close();
+                  }
+                  break;
+
+                case 'error':
+                  setError(response.payload);
+                  setIsLoading(false);
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.close();
+                  }
+                  break;
+
+                default:
+                  console.warn('Unexpected message type:', response);
+              }
+            } catch (err) {
+              console.error('Failed to process message:', err);
+              setError('An error occurred while processing recommendations.');
               setIsLoading(false);
-              // Close WebSocket after receiving recommendations
               if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.close();
               }
-              break;
+            }
+          };
 
-            case 'error':
-              setError(response.payload);
-              setIsLoading(false);
-              // Close WebSocket on error
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.close();
-              }
-              break;
+          ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            setError('WebSocket connection error. Please try again.');
+            setIsLoading(false);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.close();
+            }
+          };
 
-            default:
-              console.warn('Unexpected message type:', response);
-          }
+          ws.onclose = () => {
+            console.log('WebSocket connection closed');
+          };
+
         } catch (err) {
-          console.error('Failed to process message:', err);
-          setError('An error occurred while processing recommendations.');
+          console.error('Failed to establish WebSocket connection:', err);
+          setError('Failed to establish connection. Please try again.');
           setIsLoading(false);
-          // Close WebSocket on error
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.close();
-          }
         }
-      };
-
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setError('WebSocket connection error. Please try again.');
-        setIsLoading(false);
-      };
-
-      ws.onclose = () => {
-        console.log('WebSocket connection closed');
-      };
+      }
     };
 
     setupWebSocket();
 
-    // Cleanup function
     return () => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         console.log('Cleaning up WebSocket connection');
         ws.close();
       }
     };
-  }, [sessionId]);
-
+  }, [sessionId, hasSetRecommendations]);
 
   return (
     <main className="min-h-screen bg-gradient-to-r from-[#0f172a] to-[#334155] py-12 px-4">
@@ -183,7 +200,7 @@ export default function RecommendationPage() {
             Your Personalized Career Recommendations
           </h1>
           <p className="text-center text-xl text-gray-600 mb-2">
-            AI-Enhanced Career Guidance Based on StudentProfile
+            AI-Enhanced Career Guidance Based on Student Profile
           </p>
           <p className="text-center text-gray-500 italic">
             Discover pathways aligned with student interests and strengths
