@@ -13,7 +13,17 @@
 - Generate comprehensive profiles using academic records, preferences, and career goals.
 - Address data sparsity and cold start issues, ensuring robust recommendations even for new students.
 
+![Student Profile Example](docs\page1_withexample_part2_fixed.png)
+*Example of student information and generated student profile*
+- Generate comprehensive profiles using academic records, preferences, and career goals.
+- Address data sparsity and cold start issues, ensuring robust recommendations even for new students.
+
 ### 💡 Explainable Recommendations
+- Deliver context-rich suggestions backed by real-world alumni success stories.
+- Provide transparent reasoning for recommendations, fostering trust and engagement.
+
+![Recommendation Example](docs/page2_oneexample_expandedview_2.png)
+*Expanded view of a recommendation example*
 - Deliver context-rich suggestions backed by real-world alumni success stories.
 - Provide transparent reasoning for recommendations, fostering trust and engagement.
 
@@ -90,13 +100,15 @@ This project is built on extensive research in AI-powered academic advising. Hig
 
 For a deeper dive, check out our research paper:
 
-[Innovator Group Research Paper](docs\Innovator_Group_Final_Paper_HICSS_format.pdf)
+[Innovator Group Research Paper](docs/Innovator_Group_Research.pdf)
 
 ---
 
 ## 🤝 Contributing
 
-We welcome contributions or discussions. Do not hesitate to contact us.
+We welcome contributions from the community! Here’s how you can get involved:
+- Review our [contributing guidelines](CONTRIBUTING.md).
+- Suggest enhancements or participate in ongoing evaluations.
 
 ---
 
@@ -115,4 +127,6 @@ For questions or support:
 ---
 
 Built with ❤️ by the **FutureReady AI Team**
+
+
 
