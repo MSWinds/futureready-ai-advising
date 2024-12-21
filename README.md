@@ -13,7 +13,7 @@
 - Generate comprehensive profiles using academic records, preferences, and career goals.
 - Address data sparsity and cold start issues, ensuring robust recommendations even for new students.
 
-![Student Profile Example](docs\page1_withexample_part2_fixed.png)
+![Student Profile Example](docs/page1_withexample_part2_fixed.png)
 *Example of student information and generated student profile*
 - Generate comprehensive profiles using academic records, preferences, and career goals.
 - Address data sparsity and cold start issues, ensuring robust recommendations even for new students.
